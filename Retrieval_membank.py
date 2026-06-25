@@ -339,6 +339,23 @@ def main(args, config):
                         best = test_result['r1']
                         best_epoch = epoch
                         best_log = log_stats
+        else:
+            # Save checkpoint every epoch even before eval_epoch
+            if utils.is_main_process() and not args.evaluate:
+                save_obj = {
+                    'model': model_without_ddp.state_dict(),
+                    'optimizer': optimizer.state_dict(),
+                    'lr_scheduler': lr_scheduler.state_dict(),
+                    'config': config,
+                    'epoch': epoch,
+                    'best': best,
+                    'best_epoch': best_epoch
+                }
+                torch.save(save_obj, os.path.join(args.output_dir, 'checkpoint_epoch%02d.pth' % epoch))
+                log_stats = {'epoch': epoch}
+                log_stats.update({f'train_{k}': v for k, v in train_stats.items()})
+                with open(os.path.join(args.output_dir, "log.txt"), "a") as f:
+                    f.write(json.dumps(log_stats) + "\n")
 
         if args.evaluate:
             break
