@@ -163,10 +163,10 @@ class MemoryBank(nn.Module):
         image_feats = F.normalize(image_feats, dim=-1)
         text_feats = F.normalize(text_feats, dim=-1)
 
-        # Full bank (detached)
-        all_image_feats = self.image_bank.detach()  # [N, D]
-        all_text_feats = self.text_bank.detach()    # [N, D]
-        all_ids = self.id_bank.detach()             # [N]
+        # Full bank (detached + cloned to prevent in-place modification issues)
+        all_image_feats = self.image_bank.clone().detach()  # [N, D]
+        all_text_feats = self.text_bank.clone().detach()    # [N, D]
+        all_ids = self.id_bank.clone().detach()             # [N]
 
         # Similarity matrices against entire bank
         sim_i2t = image_feats @ all_text_feats.t() / temp  # [B, N]
