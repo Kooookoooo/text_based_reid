@@ -5,7 +5,7 @@ import os
 import random
 import time
 import numpy as np
-import ruamel_yaml as yaml
+import ruamel.yaml as yaml
 import torch
 import torch.backends.cudnn as cudnn
 import torch.distributed as dist

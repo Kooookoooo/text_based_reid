@@ -38,8 +38,21 @@ part_proj_dim: 256
 part_temp: 0.07
 part_loss_weight: 0.5
 
-optimizer: {opt: adamW, lr: 1e-5, weight_decay: 0.02, lr_custm: 1e-4}
-schedular: {sched: cosine, lr: 1e-5, epochs: 30, min_lr: 1e-6, decay_rate: 1, warmup_lr: 1e-5, warmup_epochs: 1, cooldown_epochs: 0}
+optimizer:
+  opt: adamW
+  lr: 0.00001
+  weight_decay: 0.02
+  lr_custm: 0.0001
+
+schedular:
+  sched: cosine
+  lr: 0.00001
+  epochs: 30
+  min_lr: 0.000001
+  decay_rate: 1
+  warmup_lr: 0.00001
+  warmup_epochs: 1
+  cooldown_epochs: 0
 
 eval_epoch: 10
 

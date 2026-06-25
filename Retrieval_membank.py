@@ -16,7 +16,7 @@ import os
 import random
 import time
 import numpy as np
-import ruamel_yaml as yaml
+import yaml
 import torch
 import torch.backends.cudnn as cudnn
 import torch.distributed as dist
@@ -77,6 +77,17 @@ def train(model, data_loader, optimizer, tokenizer, epoch, warmup_steps, device,
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+
+        # Update memory bank AFTER backward
+        with torch.no_grad():
+            # Re-use the features computed in forward (detached by the bank.update method)
+            model_ref = model.module if hasattr(model, 'module') else model
+            # Recompute feats cheaply from the already-updated model
+            ie = model_ref.visual_encoder(image1)
+            img_f = F.normalize(model_ref.vision_proj(ie[:, 0, :]), dim=-1)
+            to = model_ref.text_encoder.bert(text_input2.input_ids, attention_mask=text_input2.attention_mask, return_dict=True, mode='text')
+            txt_f = F.normalize(model_ref.text_proj(to.last_hidden_state[:, 0, :]), dim=-1)
+            model_ref.memory_bank.update(img_f, txt_f, idx, idx)
 
         metric_logger.update(loss_cl=loss_cl.item())
         metric_logger.update(loss_pitm=loss_pitm.item())
@@ -359,7 +370,7 @@ if __name__ == '__main__':
     parser.add_argument('--distributed', default=True, type=bool)
     args = parser.parse_args()
 
-    config = yaml.load(open(args.config, 'r'), Loader=yaml.Loader)
+    config = yaml.safe_load(open(args.config, 'r'))
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
     yaml.dump(config, open(os.path.join(args.output_dir, 'config.yaml'), 'w'))
     main(args, config)

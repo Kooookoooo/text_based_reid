@@ -99,7 +99,8 @@ class ALBEF_MemBankOnly(nn.Module):
         loss_cl = self.memory_bank.contrastive_loss(
             image_feat, text_feat, idx, person_ids, temp=self.temp
         )
-        self.memory_bank.update(image_feat, text_feat, idx, person_ids)
+
+        # NOTE: bank update moved to after backward (called from training loop)
 
         # ITM
         output_pos = self.text_encoder.bert(
