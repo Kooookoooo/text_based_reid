@@ -149,27 +149,27 @@ class FullMemoryBank(nn.Module):
     @torch.no_grad()
     def update_images(self, image_feats, file_paths):
         """EMA-update image bank for given file paths."""
-        image_feats = F.normalize(image_feats.detach(), dim=-1)
+        image_feats = F.normalize(image_feats.detach(), dim=-1).cpu()
         for j, fp in enumerate(file_paths):
             if fp in self.image_to_idx:
                 idx = self.image_to_idx[fp]
                 self.image_bank[idx] = (
                     self.momentum * self.image_bank[idx] +
-                    (1 - self.momentum) * image_feats[j].cpu()
+                    (1 - self.momentum) * image_feats[j]
                 )
                 self.image_bank[idx] = F.normalize(self.image_bank[idx], dim=-1)
 
     @torch.no_grad()
     def update_texts(self, text_feats, file_paths, captions):
         """EMA-update text bank for given (file_path, caption) pairs."""
-        text_feats = F.normalize(text_feats.detach(), dim=-1)
+        text_feats = F.normalize(text_feats.detach(), dim=-1).cpu()
         for j in range(len(captions)):
             key = (file_paths[j], captions[j])
             if key in self.text_to_idx:
                 idx = self.text_to_idx[key]
                 self.text_bank[idx] = (
                     self.momentum * self.text_bank[idx] +
-                    (1 - self.momentum) * text_feats[j].cpu()
+                    (1 - self.momentum) * text_feats[j]
                 )
                 self.text_bank[idx] = F.normalize(self.text_bank[idx], dim=-1)
 
