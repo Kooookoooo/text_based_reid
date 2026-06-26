@@ -204,19 +204,17 @@ class FullMemoryBank(nn.Module):
                 )
                 self.text_bank[idx] = F.normalize(self.text_bank[idx], dim=-1)
 
-    def contrastive_loss(self, image_feats, text_feats, person_ids, temp=0.07):
+    def contrastive_loss(self, image_feats, text_feats, person_ids, temp=0.07, top_k=512):
         """
-        Global contrastive loss against entire bank.
-
-        Positives:
-        - For image query: all texts in text_bank with same person_id
-        - For text query: all images in image_bank with same person_id
+        Global contrastive loss with hard negative mining.
+        Only computes loss against top-K hardest negatives + all positives per sample.
 
         Args:
             image_feats: [B, D] current batch image features
             text_feats: [B, D] current batch text features
             person_ids: [B] person identity for each sample in batch
             temp: temperature
+            top_k: number of hardest negatives to use (rest are ignored)
 
         Returns:
             loss: scalar
@@ -238,16 +236,39 @@ class FullMemoryBank(nn.Module):
         all_image_feats = all_image_feats[valid_img_mask]
         all_image_ids = all_image_ids[valid_img_mask]
 
-        # Image-to-Text: sim against all texts
+        N_txt = all_text_feats.size(0)
+        N_img = all_image_feats.size(0)
+
+        # Image-to-Text
         sim_i2t = image_feats @ all_text_feats.t() / temp  # [B, N_txt]
-        # Positive mask: same person
         pos_mask_i2t = person_ids.unsqueeze(1) == all_text_ids.unsqueeze(0)  # [B, N_txt]
+
+        # Hard negative mining: keep top-K negatives + all positives
+        if top_k < N_txt:
+            neg_sim_i2t = sim_i2t.clone()
+            neg_sim_i2t[pos_mask_i2t] = -1e4  # exclude positives
+            _, topk_idx_i2t = neg_sim_i2t.topk(top_k, dim=1)  # [B, top_k]
+            # Build mask of selected entries (positives + top-K negatives)
+            select_mask_i2t = pos_mask_i2t.clone()
+            select_mask_i2t.scatter_(1, topk_idx_i2t, True)
+            # Apply mask — set non-selected to -inf
+            sim_i2t[~select_mask_i2t] = -1e4
+
         pos_count_i2t = pos_mask_i2t.float().sum(dim=1, keepdim=True).clamp(min=1)
         targets_i2t = pos_mask_i2t.float() / pos_count_i2t
 
-        # Text-to-Image: sim against all images
+        # Text-to-Image
         sim_t2i = text_feats @ all_image_feats.t() / temp  # [B, N_img]
         pos_mask_t2i = person_ids.unsqueeze(1) == all_image_ids.unsqueeze(0)  # [B, N_img]
+
+        if top_k < N_img:
+            neg_sim_t2i = sim_t2i.clone()
+            neg_sim_t2i[pos_mask_t2i] = -1e4
+            _, topk_idx_t2i = neg_sim_t2i.topk(top_k, dim=1)
+            select_mask_t2i = pos_mask_t2i.clone()
+            select_mask_t2i.scatter_(1, topk_idx_t2i, True)
+            sim_t2i[~select_mask_t2i] = -1e4
+
         pos_count_t2i = pos_mask_t2i.float().sum(dim=1, keepdim=True).clamp(min=1)
         targets_t2i = pos_mask_t2i.float() / pos_count_t2i
 
@@ -257,3 +278,13 @@ class FullMemoryBank(nn.Module):
 
         loss = (loss_i2t + loss_t2i) / 2
         return loss
+
+    def schedule_momentum(self, epoch, max_epochs):
+        """
+        Decay momentum from 0.99 (stable early) to 0.85 (faster adaptation later).
+        Call at the start of each epoch.
+        """
+        start_momentum = 0.99
+        end_momentum = 0.85
+        self.momentum = start_momentum - (start_momentum - end_momentum) * (epoch / max(max_epochs - 1, 1))
+        return self.momentum

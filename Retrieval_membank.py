@@ -51,6 +51,10 @@ def train(model, data_loader, optimizer, tokenizer, epoch, warmup_steps, device,
     # Mixed precision scaler for faster training on A100
     scaler = torch.amp.GradScaler('cuda')
 
+    # Gradient accumulation
+    accum_steps = 2
+    optimizer.zero_grad()
+
     for i, (image1, image2, text1, text2, idx, replace, file_paths) in enumerate(
             metric_logger.log_every(data_loader, print_freq, header)):
         image1 = image1.to(device, non_blocking=True)
@@ -78,11 +82,15 @@ def train(model, data_loader, optimizer, tokenizer, epoch, warmup_steps, device,
             loss = 0.
             for j, los in enumerate((loss_cl, loss_pitm, loss_mlm, loss_prd, loss_mrtd)):
                 loss += config['weights'][j] * los
+            loss = loss / accum_steps  # Scale loss for accumulation
 
-        optimizer.zero_grad()
         scaler.scale(loss).backward()
-        scaler.step(optimizer)
-        scaler.update()
+
+        # Step optimizer every accum_steps
+        if (i + 1) % accum_steps == 0:
+            scaler.step(optimizer)
+            scaler.update()
+            optimizer.zero_grad()
 
         # Update memory bank AFTER backward
         with torch.no_grad():
@@ -90,7 +98,6 @@ def train(model, data_loader, optimizer, tokenizer, epoch, warmup_steps, device,
             with torch.amp.autocast('cuda'):
                 ie = model_ref.visual_encoder(image1)
                 img_f = F.normalize(model_ref.vision_proj(ie[:, 0, :]), dim=-1)
-                # Use text1 (original caption) for bank update, not text2 (augmented)
                 to = model_ref.text_encoder.bert(text_input1.input_ids, attention_mask=text_input1.attention_mask, return_dict=True, mode='text')
                 txt_f = F.normalize(model_ref.text_proj(to.last_hidden_state[:, 0, :]), dim=-1)
             model_ref.memory_bank.update_images(img_f, file_paths)
@@ -105,6 +112,12 @@ def train(model, data_loader, optimizer, tokenizer, epoch, warmup_steps, device,
 
         if epoch == 0 and i % step_size == 0 and i <= warmup_iterations:
             scheduler.step(i // step_size)
+
+    # Handle remaining accumulated gradients
+    if len(data_loader) % accum_steps != 0:
+        scaler.step(optimizer)
+        scaler.update()
+        optimizer.zero_grad()
 
     metric_logger.synchronize_between_processes()
     print("Averaged stats:", metric_logger.global_avg())
@@ -304,6 +317,9 @@ def main(args, config):
         if not args.evaluate:
             if epoch > 0:
                 lr_scheduler.step(epoch + warmup_steps)
+            # Schedule memory bank momentum (0.99 early → 0.85 late)
+            new_mom = model_without_ddp.memory_bank.schedule_momentum(epoch, max_epoch)
+            print(f"  Bank momentum: {new_mom:.4f}")
             if args.distributed:
                 train_loader.sampler.set_epoch(epoch)
             train_stats = train(model, train_loader, optimizer, tokenizer, epoch,
