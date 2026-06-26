@@ -131,9 +131,16 @@ class ALBEF_MemBankOnly(nn.Module):
             sim_i2t.masked_fill_(same_mask_i2t, -1e4)
             sim_t2i.masked_fill_(same_mask_t2i, -1e4)
 
-            # Sample hard negatives from current batch
-            weights_i2t = F.softmax(sim_i2t[:, :bs], dim=1)
-            weights_t2i = F.softmax(sim_t2i[:, :bs], dim=1)
+            # Sample hard negatives from current batch using batch-local similarities
+            # Compute batch-internal similarities for negative mining
+            batch_sim_i2t = image_feat @ text_feat.t()  # [B, B]
+            batch_sim_t2i = text_feat @ image_feat.t()  # [B, B]
+            # Mask same person within batch
+            batch_same_mask = person_ids.unsqueeze(1) == person_ids.unsqueeze(0)
+            batch_sim_i2t.masked_fill_(batch_same_mask, -1e4)
+            batch_sim_t2i.masked_fill_(batch_same_mask, -1e4)
+            weights_i2t = F.softmax(batch_sim_i2t, dim=1)
+            weights_t2i = F.softmax(batch_sim_t2i, dim=1)
 
         image_neg_idx = torch.multinomial(weights_t2i[:, :bs], 1).flatten()
         image_embeds_neg = image_embeds[image_neg_idx]

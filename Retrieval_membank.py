@@ -90,10 +90,11 @@ def train(model, data_loader, optimizer, tokenizer, epoch, warmup_steps, device,
             with torch.amp.autocast('cuda'):
                 ie = model_ref.visual_encoder(image1)
                 img_f = F.normalize(model_ref.vision_proj(ie[:, 0, :]), dim=-1)
-                to = model_ref.text_encoder.bert(text_input2.input_ids, attention_mask=text_input2.attention_mask, return_dict=True, mode='text')
+                # Use text1 (original caption) for bank update, not text2 (augmented)
+                to = model_ref.text_encoder.bert(text_input1.input_ids, attention_mask=text_input1.attention_mask, return_dict=True, mode='text')
                 txt_f = F.normalize(model_ref.text_proj(to.last_hidden_state[:, 0, :]), dim=-1)
             model_ref.memory_bank.update_images(img_f, file_paths)
-            model_ref.memory_bank.update_texts(txt_f, file_paths, list(text2))
+            model_ref.memory_bank.update_texts(txt_f, file_paths, list(text1))
 
         metric_logger.update(loss_cl=loss_cl.item())
         metric_logger.update(loss_pitm=loss_pitm.item())
