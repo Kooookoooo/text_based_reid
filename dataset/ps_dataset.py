@@ -49,15 +49,15 @@ class ps_train_dataset(Dataset):
         return caption_aug, replace
 
     def __getitem__(self, index):
-        image_path, caption, person = self.pairs[index]
+        rel_image_path, caption, person = self.pairs[index]
         caption_aug, replace = self.augment(caption, person)
-        image_path = os.path.join(self.image_root, image_path)
+        image_path = os.path.join(self.image_root, rel_image_path)
         image = Image.open(image_path).convert('RGB')
         image1 = self.transform(image)
         image2 = self.transform(image)
         caption1 = pre_caption(caption, self.max_words)
         caption2 = pre_caption(caption_aug, self.max_words)
-        return image1, image2, caption1, caption2, person, replace
+        return image1, image2, caption1, caption2, person, replace, rel_image_path
 
 class ps_eval_dataset(Dataset):
     def __init__(self, ann_file, transform, image_root, max_words=30):

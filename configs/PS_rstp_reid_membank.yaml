@@ -1,0 +1,65 @@
+train_file:  ['data/RSTPReid/processed_data/train.json']
+val_file: 'data/RSTPReid/processed_data/val.json'
+test_file: 'data/RSTPReid/processed_data/test.json'
+train_image_root: 'data/RSTPReid/imgs'
+val_image_root: 'data/RSTPReid/imgs'
+test_image_root: 'data/RSTPReid/imgs'
+
+bert_config: 'configs/config_bert.json'
+
+max_words: 50
+image_res: 384
+batch_size_train: 48
+batch_size_test: 128
+
+mlm_probability: 0.15
+weak_pos_pair_probability: 0.1
+mrtd_mask_probability: 0.3
+
+queue_size: 65536
+momentum: 0.995
+vision_width: 768
+embed_dim: 256
+temp: 0.07
+k_test: 128
+
+# Memory Bank config — stores every image and every text
+# RSTPReID: 18505 unique images, 37010 unique texts (2 captions per image)
+num_images: 18505
+num_texts: 37010
+bank_momentum: 0.9
+
+alpha: 0.4
+warm_up: True
+
+# Part-level loss config
+part_proj_dim: 256
+part_temp: 0.07
+part_loss_weight: 0.5
+
+optimizer:
+  opt: adamW
+  lr: 0.00001
+  weight_decay: 0.02
+  lr_custm: 0.0001
+
+schedular:
+  sched: cosine
+  lr: 0.00001
+  epochs: 30
+  min_lr: 0.000001
+  decay_rate: 1
+  warmup_lr: 0.00001
+  warmup_epochs: 1
+  cooldown_epochs: 0
+
+eval_epoch: 0
+
+# Weights for: loss_cl, loss_pitm, loss_mlm, loss_prd, loss_mrtd, loss_part
+weights:
+  - 0.5
+  - 1
+  - 1
+  - 0.5
+  - 0.5
+  - 0.5

@@ -17,7 +17,7 @@ import torch.nn.functional as F
 from torch import nn
 from models.vit import VisionTransformer
 from models.xbert import BertConfig, BertForMaskedLM
-from models.memory_bank import MemoryBank
+from models.memory_bank import FullMemoryBank
 
 
 class ALBEF_MemBankOnly(nn.Module):
@@ -53,11 +53,13 @@ class ALBEF_MemBankOnly(nn.Module):
         self.prd_head = nn.Linear(self.text_width, 2)
         self.mrtd_head = nn.Linear(self.text_width, 2)
 
-        # Memory Bank (replaces queue)
-        num_samples = config.get('num_train_samples', 35000)
+        # Memory Bank — stores every image and every text separately
+        num_images = config.get('num_images', 10000)
+        num_texts = config.get('num_texts', 40000)
         bank_momentum = config.get('bank_momentum', 0.9)
-        self.memory_bank = MemoryBank(
-            num_samples=num_samples,
+        self.memory_bank = FullMemoryBank(
+            num_images=num_images,
+            num_texts=num_texts,
             embed_dim=embed_dim,
             momentum=bank_momentum,
         )
@@ -97,7 +99,7 @@ class ALBEF_MemBankOnly(nn.Module):
         # Global Contrastive Loss via Memory Bank
         person_ids = idx
         loss_cl = self.memory_bank.contrastive_loss(
-            image_feat, text_feat, idx, person_ids, temp=self.temp
+            image_feat, text_feat, person_ids, temp=self.temp
         )
 
         # NOTE: bank update moved to after backward (called from training loop)
@@ -111,18 +113,25 @@ class ALBEF_MemBankOnly(nn.Module):
 
         bs = image1.size(0)
         with torch.no_grad():
-            all_text_feats = self.memory_bank.text_bank.detach()
-            all_image_feats = self.memory_bank.image_bank.detach()
-            all_ids = self.memory_bank.id_bank.detach()
+            all_text_feats = self.memory_bank.text_bank.to(image1.device)
+            all_text_ids = self.memory_bank.text_id_bank.to(image1.device)
+            all_image_feats = self.memory_bank.image_bank.to(image1.device)
+            all_image_ids = self.memory_bank.image_id_bank.to(image1.device)
 
-            sim_i2t = image_feat @ all_text_feats.t()
-            sim_t2i = text_feat @ all_image_feats.t()
+            # Filter valid
+            valid_txt = all_text_ids >= 0
+            valid_img = all_image_ids >= 0
 
-            same_person_mask = person_ids.unsqueeze(1) == all_ids.unsqueeze(0)
-            sim_i2t.masked_fill_(same_person_mask, -1e9)
-            sim_t2i.masked_fill_(same_person_mask, -1e9)
+            sim_i2t = image_feat @ all_text_feats[valid_txt].t()
+            sim_t2i = text_feat @ all_image_feats[valid_img].t()
 
-            # Sample negatives from current batch
+            # Mask same person
+            same_mask_i2t = person_ids.unsqueeze(1) == all_text_ids[valid_txt].unsqueeze(0)
+            same_mask_t2i = person_ids.unsqueeze(1) == all_image_ids[valid_img].unsqueeze(0)
+            sim_i2t.masked_fill_(same_mask_i2t, -1e4)
+            sim_t2i.masked_fill_(same_mask_t2i, -1e4)
+
+            # Sample hard negatives from current batch
             weights_i2t = F.softmax(sim_i2t[:, :bs], dim=1)
             weights_t2i = F.softmax(sim_t2i[:, :bs], dim=1)
 

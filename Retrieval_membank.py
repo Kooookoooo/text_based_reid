@@ -48,7 +48,10 @@ def train(model, data_loader, optimizer, tokenizer, epoch, warmup_steps, device,
     step_size = 100
     warmup_iterations = warmup_steps * step_size
 
-    for i, (image1, image2, text1, text2, idx, replace) in enumerate(
+    # Mixed precision scaler for faster training on A100
+    scaler = torch.amp.GradScaler('cuda')
+
+    for i, (image1, image2, text1, text2, idx, replace, file_paths) in enumerate(
             metric_logger.log_every(data_loader, print_freq, header)):
         image1 = image1.to(device, non_blocking=True)
         image2 = image2.to(device, non_blocking=True)
@@ -65,29 +68,32 @@ def train(model, data_loader, optimizer, tokenizer, epoch, warmup_steps, device,
         else:
             alpha = config['alpha'] * min(1.0, i / len(data_loader))
 
-        loss_cl, loss_pitm, loss_mlm, loss_prd, loss_mrtd = model(
-            image1, image2, text_input1, text_input2,
-            alpha=alpha, idx=idx, replace=replace
-        )
+        # Forward with mixed precision
+        with torch.amp.autocast('cuda'):
+            loss_cl, loss_pitm, loss_mlm, loss_prd, loss_mrtd = model(
+                image1, image2, text_input1, text_input2,
+                alpha=alpha, idx=idx, replace=replace
+            )
 
-        loss = 0.
-        for j, los in enumerate((loss_cl, loss_pitm, loss_mlm, loss_prd, loss_mrtd)):
-            loss += config['weights'][j] * los
+            loss = 0.
+            for j, los in enumerate((loss_cl, loss_pitm, loss_mlm, loss_prd, loss_mrtd)):
+                loss += config['weights'][j] * los
 
         optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
 
         # Update memory bank AFTER backward
         with torch.no_grad():
-            # Re-use the features computed in forward (detached by the bank.update method)
             model_ref = model.module if hasattr(model, 'module') else model
-            # Recompute feats cheaply from the already-updated model
-            ie = model_ref.visual_encoder(image1)
-            img_f = F.normalize(model_ref.vision_proj(ie[:, 0, :]), dim=-1)
-            to = model_ref.text_encoder.bert(text_input2.input_ids, attention_mask=text_input2.attention_mask, return_dict=True, mode='text')
-            txt_f = F.normalize(model_ref.text_proj(to.last_hidden_state[:, 0, :]), dim=-1)
-            model_ref.memory_bank.update(img_f, txt_f, idx, idx)
+            with torch.amp.autocast('cuda'):
+                ie = model_ref.visual_encoder(image1)
+                img_f = F.normalize(model_ref.vision_proj(ie[:, 0, :]), dim=-1)
+                to = model_ref.text_encoder.bert(text_input2.input_ids, attention_mask=text_input2.attention_mask, return_dict=True, mode='text')
+                txt_f = F.normalize(model_ref.text_proj(to.last_hidden_state[:, 0, :]), dim=-1)
+            model_ref.memory_bank.update_images(img_f, file_paths)
+            model_ref.memory_bank.update_texts(txt_f, file_paths, list(text2))
 
         metric_logger.update(loss_cl=loss_cl.item())
         metric_logger.update(loss_pitm=loss_pitm.item())
@@ -159,7 +165,7 @@ def evaluation(model, data_loader, tokenizer, device, config):
 
     for i, sims in enumerate(metric_logger.log_every(sims_matrix[start:end], 50, header)):
         topk_sim, topk_idx = sims.topk(k=config['k_test'], dim=0)
-        encoder_output = image_feats[topk_idx]
+        encoder_output = image_feats[topk_idx.cpu()]
         encoder_att = torch.ones(encoder_output.size()[:-1], dtype=torch.long).to(device)
         output = model.text_encoder.bert(
             encoder_embeds=text_feats[start + i].repeat(config['k_test'], 1, 1),
@@ -285,15 +291,10 @@ def main(args, config):
 
     # Initialize memory bank
     print("Initializing memory bank...")
-    init_loader = DataLoader(
-        train_dataset, batch_size=config['batch_size_test'],
-        shuffle=False, num_workers=4, pin_memory=True, drop_last=False
-    )
     model_without_ddp.memory_bank.initialize(
-        init_loader, model_without_ddp, tokenizer, device,
-        max_words=config['max_words']
+        train_dataset, model_without_ddp, tokenizer, device,
+        max_words=config['max_words'], batch_size=config['batch_size_test']
     )
-    del init_loader
 
     print("Start training")
     start_time = time.time()
