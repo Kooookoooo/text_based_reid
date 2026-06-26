@@ -47,11 +47,27 @@ class FullMemoryBank(nn.Module):
         self.register_buffer("is_initialized", torch.tensor(False))
 
     @torch.no_grad()
-    def initialize(self, train_dataset, model, tokenizer, device, max_words=50, batch_size=128):
+    def initialize(self, train_dataset, model, tokenizer, device, max_words=50, batch_size=128, cache_path="output/memory_bank_cache.pt"):
         """
         Populate banks by iterating through the dataset.
-        Handles imbalanced pairs: each unique image gets a slot, each unique text gets a slot.
+        Saves to cache_path after initialization. Loads from cache if it exists.
         """
+        import os
+
+        # Try loading from cache
+        if os.path.exists(cache_path):
+            print(f"Loading memory bank from cache: {cache_path}")
+            cache = torch.load(cache_path, map_location='cpu')
+            self.image_bank.copy_(cache['image_bank'])
+            self.text_bank.copy_(cache['text_bank'])
+            self.image_id_bank.copy_(cache['image_id_bank'])
+            self.text_id_bank.copy_(cache['text_id_bank'])
+            self.image_to_idx = cache['image_to_idx']
+            self.text_to_idx = cache['text_to_idx']
+            self.is_initialized = torch.tensor(True)
+            print(f"Memory bank loaded from cache: {self.image_bank.shape[0]} images, {self.text_bank.shape[0]} texts")
+            return
+
         if self.is_initialized:
             print("Memory bank already initialized, skipping.")
             return
@@ -142,6 +158,19 @@ class FullMemoryBank(nn.Module):
         # Store maps for use during training
         self.image_to_idx = image_to_idx
         self.text_to_idx = text_to_idx
+
+        # Save cache so we don't have to re-initialize
+        import os
+        os.makedirs(os.path.dirname(cache_path) if os.path.dirname(cache_path) else '.', exist_ok=True)
+        torch.save({
+            'image_bank': self.image_bank,
+            'text_bank': self.text_bank,
+            'image_id_bank': self.image_id_bank,
+            'text_id_bank': self.text_id_bank,
+            'image_to_idx': image_to_idx,
+            'text_to_idx': text_to_idx,
+        }, cache_path)
+        print(f"Memory bank cache saved to: {cache_path}")
 
         model.train()
         print(f"Memory bank initialized: {img_idx} images, {txt_idx} texts")
